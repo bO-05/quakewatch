@@ -40,8 +40,13 @@ npm run dev
 
 ## Contributing
 
-This project was created for the Hack for Humanity 2025 hackathon.
+This project was created for the Hack for [Humanity 2025 hackathon](https://hack-for-humanity-25.devpost.com/).
 
 ## License
 
 MIT
+
+## Links:
+- Github: [https://github.com/bO-05/quakewatch](https://github.com/bO-05/quakewatch)
+- Website: [https://quakewatch.vercel.app/](https://quakewatch.vercel.app/)
+- Devpost: [https://devpost.com/software/quakewatch-real-time-global-earthquake-monitoring-platform](https://devpost.com/software/quakewatch-real-time-global-earthquake-monitoring-platform)
