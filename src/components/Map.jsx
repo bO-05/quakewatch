@@ -1,284 +1,156 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 import { getRecentEarthquakes } from '../services/earthquakeService';
 import EarthquakeFilters from './EarthquakeFilters';
 import EarthquakeList from './EarthquakeList';
-import { 
-  createClusterMarkers, 
-  createMarkerElement, 
-  createPopupContent, 
-  createLegend 
-} from '../utils/mapUtils';
+import { createClusterMarkers, createMarkerElement, createPopupContent, createLegend } from '../utils/mapUtils';
 
-mapboxgl.accessToken = "pk.eyJ1IjoiYmxlc3NlZGJ5aG9wZSIsImEiOiJjbTY2ZTN2cHcwMG0yMmxzOTNhaWF0Z3B5In0.aob78sdxiznzatk3FhQAUw";
+const mapToken = (import.meta.env.VITE_MAPBOX_TOKEN || '').trim();
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export default function Map() {
-  const mapContainerRef = useRef(null);
+  const container = useRef(null);
   const mapRef = useRef(null);
-  const markersRef = useRef([]);
-  const legendRef = useRef(null);
-  const updateTimeoutRef = useRef(null);
+  const markers = useRef([]);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState(mapToken ? null : 'Map tiles are not configured on this deployment. The event list and filters still work.');
+  const [query, setQuery] = useState({ days: 7, minMagnitude: 5 });
+  const [refresh, setRefresh] = useState(0);
   const [earthquakes, setEarthquakes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
-  // Clear existing markers
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const retry = useCallback(() => setRefresh(value => value + 1), []);
   const clearMarkers = useCallback(() => {
-    if (markersRef.current) {
-      markersRef.current.forEach(marker => {
-        if (marker && typeof marker.remove === 'function') {
-          marker.remove();
-        }
-      });
-      markersRef.current = [];
-    }
+    markers.current.forEach(marker => marker.remove());
+    markers.current = [];
   }, []);
 
-  // Update markers based on current view
-  const updateMarkers = useCallback(() => {
-    if (!mapRef.current || !earthquakes.length) return;
-
-    const map = mapRef.current;
-    if (!map.loaded()) return;
-
-    try {
-      clearMarkers();
-      const bounds = map.getBounds();
-      const zoom = map.getZoom();
-
-      const markers = createClusterMarkers(earthquakes, bounds, zoom);
-      if (!markers || !markers.length) return;
-
-      markersRef.current = markers.map(marker => {
-        if (!marker || !marker.coordinates) return null;
-
-        const el = createMarkerElement(
-          marker.type,
-          marker.type === 'single' ? marker.earthquake : marker
-        );
-
-        if (!el) return null;
-
-        // Create popup
-        const popup = new mapboxgl.Popup({ 
-          offset: marker.type === 'single' ? marker.magnitude * 5 : 30,
-          closeButton: true,
-          closeOnClick: false,
-          maxWidth: '300px'
-        }).setHTML(createPopupContent(marker.type, marker.type === 'single' ? marker.earthquake : marker));
-
-        // Add marker to map
-        const mapMarker = new mapboxgl.Marker({
-          element: el,
-          anchor: 'center'
-        })
-          .setLngLat(marker.coordinates)
-          .setPopup(popup)
-          .addTo(map);
-
-        // Add click handler for clusters
-        if (marker.type === 'cluster') {
-          el.addEventListener('click', () => {
-            map.flyTo({
-              center: marker.coordinates,
-              zoom: Math.min(map.getZoom() + 2, 16),
-              duration: 1000
-            });
-          });
-        }
-
-        return mapMarker;
-      }).filter(Boolean);
-    } catch (err) {
-      console.error('Error updating markers:', err);
-      setError('Error displaying earthquake data');
-    }
-  }, [earthquakes, clearMarkers]);
-
-  // Load earthquake data
-  const loadEarthquakes = useCallback(async (days = 7, minMagnitude = 4.5) => {
-    try {
+  // Data access does not depend on a map token, WebGL, or the map's load event.
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
       setLoading(true);
       setError(null);
-      const data = await getRecentEarthquakes({ days, minMagnitude });
-      if (!Array.isArray(data)) {
-        throw new Error('Invalid earthquake data received');
-      }
-      setEarthquakes(data);
-    } catch (err) {
-      console.error('Error loading earthquakes:', err);
-      setError('Failed to load earthquake data');
       setEarthquakes([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Handle filter changes
-  const handleFilterChange = useCallback(({ minMagnitude, days }) => {
-    loadEarthquakes(days, minMagnitude);
-  }, [loadEarthquakes]);
-
-  // Handle earthquake selection
-  const handleEarthquakeSelect = useCallback((earthquake) => {
-    if (!mapRef.current || !earthquake?.coordinates) return;
-
-    const map = mapRef.current;
-    
-    try {
-      // Remove existing popups
-      const existingPopups = document.getElementsByClassName('mapboxgl-popup');
-      Array.from(existingPopups).forEach(popup => popup.remove());
-      
-      // Fly to the earthquake location
-      map.flyTo({
-        center: [earthquake.coordinates[0], earthquake.coordinates[1]],
-        zoom: 8,
-        duration: 2000,
-        essential: true // This ensures the animation runs smoothly
-      });
-
-      // Create a popup for the selected earthquake
-      new mapboxgl.Popup({
-        closeButton: true,
-        closeOnClick: false,
-        maxWidth: '300px',
-        className: 'earthquake-popup'
-      })
-        .setLngLat([earthquake.coordinates[0], earthquake.coordinates[1]])
-        .setHTML(createPopupContent('single', { earthquake }))
-        .addTo(map);
-    } catch (error) {
-      console.error('Error handling earthquake selection:', error);
-    }
-  }, []);
-
-  // Initialize map
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-
-    const map = new mapboxgl.Map({
-      container: mapContainerRef.current,
-      style: 'mapbox://styles/mapbox/streets-v12',
-      center: [150, 0],
-      zoom: 2
-    });
-
-    mapRef.current = map;
-
-    // Add navigation controls
-    map.addControl(new mapboxgl.NavigationControl(), 'top-right');
-
-    // Add legend
-    const legend = createLegend();
-    if (legend) {
-      legendRef.current = legend;
-      mapContainerRef.current.appendChild(legend);
-    }
-
-    // Load initial data once map is ready
-    map.once('load', () => {
-      loadEarthquakes();
-    });
-
-    // Cleanup function
-    return () => {
-      clearMarkers();
-      if (legendRef.current && legendRef.current.parentNode) {
-        legendRef.current.parentNode.removeChild(legendRef.current);
+      setSelectedId(null);
+      try {
+        const data = await getRecentEarthquakes(query, { signal: controller.signal });
+        if (!active) return;
+        setEarthquakes(data);
+        setUpdatedAt(Date.now());
+      } catch {
+        if (active && !controller.signal.aborted) setError('Unable to load USGS records. Try again. This is not an emergency alert service.');
+      } finally {
+        if (active) setLoading(false);
       }
-      map.remove();
+    }, 150);
+    return () => { active = false; clearTimeout(timer); controller.abort(); };
+  }, [query, refresh]);
+
+  useEffect(() => {
+    if (!mapToken || !container.current) return;
+    let map;
+    let legend;
+    let timeout;
+    try {
+      mapboxgl.accessToken = mapToken;
+      map = new mapboxgl.Map({
+        container: container.current, style: 'mapbox://styles/mapbox/streets-v12',
+        center: [150, 0], zoom: 2,
+      });
+      mapRef.current = map;
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+      legend = createLegend();
+      container.current.appendChild(legend);
+      timeout = setTimeout(() => {
+        if (!map.loaded()) setMapError('Map tiles did not load. The event list and filters are independent of the map.');
+      }, 15000);
+      map.once('load', () => { clearTimeout(timeout); setMapReady(true); setMapError(null); });
+      map.on('error', () => setMapError('Map tiles are unavailable. You can still read and filter the USGS event list.'));
+    } catch {
+      setMapError('This browser could not initialize the map. The event list and filters still work.');
+    }
+    return () => {
+      clearTimeout(timeout);
+      clearMarkers();
+      legend?.remove();
+      map?.remove();
       mapRef.current = null;
     };
-  }, [clearMarkers, loadEarthquakes]);
+  }, [clearMarkers]);
 
-  // Set up map event handlers
+  const updateMarkers = useCallback(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    clearMarkers();
+    try {
+      markers.current = createClusterMarkers(earthquakes, map.getBounds(), map.getZoom()).map(marker => {
+        const data = marker.type === 'single' ? marker.earthquake : marker;
+        const element = createMarkerElement(marker.type, data);
+        const popup = new mapboxgl.Popup({ offset: 24, closeOnClick: false, maxWidth: '300px' })
+          .setHTML(createPopupContent(marker.type, data));
+        if (marker.type === 'cluster') element.addEventListener('click', () => map.flyTo({
+          center: marker.coordinates, zoom: Math.min(map.getZoom() + 2, 16), animate: !reducedMotion(),
+        }));
+        return new mapboxgl.Marker({ element, anchor: 'center' }).setLngLat(marker.coordinates).setPopup(popup).addTo(map);
+      });
+    } catch {
+      setMapError('Some map markers could not be displayed. The validated event list is still available.');
+    }
+  }, [earthquakes, clearMarkers, mapReady]);
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-
-    const handleMapUpdate = () => {
-      if (!map.loaded()) return;
-
-      // Clear any pending update
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
-
-      // Schedule new update
-      updateTimeoutRef.current = setTimeout(() => {
-        updateMarkers();
-        updateTimeoutRef.current = null;
-      }, 100);
-    };
-
-    map.on('moveend', handleMapUpdate);
-    map.on('zoomend', handleMapUpdate);
-
+    if (!map || !mapReady) return;
+    let timer;
+    const update = () => { clearTimeout(timer); timer = setTimeout(updateMarkers, 100); };
+    updateMarkers();
+    map.on('moveend', update);
+    map.on('zoomend', update);
     return () => {
-      map.off('moveend', handleMapUpdate);
-      map.off('zoomend', handleMapUpdate);
-      if (updateTimeoutRef.current) {
-        clearTimeout(updateTimeoutRef.current);
-      }
+      clearTimeout(timer);
+      map.off('moveend', update);
+      map.off('zoomend', update);
+      clearMarkers();
     };
-  }, [updateMarkers]);
+  }, [updateMarkers, clearMarkers, mapReady]);
 
-  // Update markers when earthquake data changes
-  useEffect(() => {
-    if (mapRef.current?.loaded() && earthquakes.length > 0) {
-      updateMarkers();
-    }
-  }, [earthquakes, updateMarkers]);
+  const selectEvent = useCallback(earthquake => {
+    setSelectedId(earthquake.id);
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    map.getContainer().querySelectorAll('.mapboxgl-popup').forEach(popup => popup.remove());
+    map.flyTo({ center: earthquake.coordinates.slice(0, 2), zoom: 8, animate: !reducedMotion() });
+    new mapboxgl.Popup({ maxWidth: '300px' })
+      .setLngLat(earthquake.coordinates.slice(0, 2)).setHTML(createPopupContent('single', earthquake)).addTo(map);
+  }, [mapReady]);
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100vh' }}>
-      <div ref={mapContainerRef} style={{ width: '100%', height: '100%' }} />
-      
-      {/* Filters */}
-      <EarthquakeFilters onFilterChange={handleFilterChange} />
-      
-      {/* Earthquake List */}
-      <EarthquakeList 
-        earthquakes={earthquakes}
-        loading={loading}
-        error={error}
-        onEarthquakeSelect={handleEarthquakeSelect}
-      />
-
-      {/* Loading indicator */}
-      {loading && (
-        <div style={{
-          position: 'absolute',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          background: 'rgba(255, 255, 255, 0.9)',
-          padding: '20px',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-        }}>
-          Loading earthquakes...
-        </div>
-      )}
-
-      {/* Error message */}
-      {error && (
-        <div style={{
-          position: 'absolute',
-          top: '20px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          background: '#f44336',
-          color: 'white',
-          padding: '10px 20px',
-          borderRadius: '4px',
-          zIndex: 1000
-        }}>
-          {error}
-        </div>
-      )}
-    </div>
+    <main className="quakewatch">
+      <header className="app-heading">
+        <div><p className="eyebrow">USGS data explorer / prototype</p><h1>QuakeWatch</h1></div>
+        <p>Explore reported events, not predictions.<br /><strong>Not an emergency alert or safety service.</strong></p>
+      </header>
+      <div className="explorer-body">
+        <section className="map-surface" aria-label="Earthquake map">
+          <div ref={container} className="map-canvas" />
+          {mapError && <p className="map-notice" role="status">{mapError}</p>}
+        </section>
+        <EarthquakeFilters value={query} onFilterChange={setQuery} />
+        <EarthquakeList earthquakes={earthquakes} loading={loading} error={error}
+          selectedId={selectedId} onEarthquakeSelect={selectEvent} onRetry={retry} />
+      </div>
+      <footer className="app-footer">
+        <p>Up to 100 matching valid point records, highest magnitude first. Times and selected dates use UTC. Reports can be revised.</p>
+        <p>Fetched on load, filter change, or refresh, not continuously monitored.
+          {updatedAt && <> Last successful fetch: {new Date(updatedAt).toLocaleTimeString('en-GB', { timeZone: 'UTC' })} UTC.</>}
+          {' '}<a href="https://earthquake.usgs.gov/" target="_blank" rel="noopener noreferrer">Source: USGS</a>
+        </p>
+      </footer>
+    </main>
   );
 }

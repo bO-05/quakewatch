@@ -73,7 +73,7 @@ async function runTests() {
       try {
         await getEarthquakes({ startTime: 'invalid' });
         console.log('✗ Should have thrown an error for invalid date');
-      } catch (error) {
+      } catch {
         console.log('✓ Properly handled invalid date');
       }
 

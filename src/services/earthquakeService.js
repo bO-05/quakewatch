@@ -1,3 +1,5 @@
+import { fetchRecentEarthquakes } from './earthquakeData';
+
 /**
  * USGS Earthquake Service
  * Documentation: https://earthquake.usgs.gov/fdsnws/event/1/
@@ -10,7 +12,7 @@ const USGS_API_BASE = 'https://earthquake.usgs.gov/fdsnws/event/1/query';
  * @param {number} timestamp - Milliseconds since epoch
  * @returns {string} Formatted date string
  */
-const formatDate = (timestamp) => {
+export const formatDate = (timestamp) => {
   try {
     const date = new Date(timestamp);
     if (isNaN(date.getTime())) {
@@ -123,37 +125,6 @@ export async function testConnection() {
  * @param {number} [options.minMagnitude=5.0] - Minimum magnitude
  * @returns {Promise<Array>} Array of earthquake features
  */
-export async function getRecentEarthquakes({ 
-  days = 7,
-  minMagnitude = 5.0
-} = {}) {
-  try {
-    // Calculate time range
-    const endTime = new Date();
-    const startTime = new Date();
-    startTime.setDate(startTime.getDate() - days);
-
-    const params = new URLSearchParams({
-      format: 'geojson',
-      starttime: startTime.toISOString().split('.')[0],
-      endtime: endTime.toISOString().split('.')[0],
-      minmagnitude: minMagnitude.toString(),
-      orderby: 'magnitude',
-      limit: 100
-    });
-
-    const response = await fetch(`${USGS_API_BASE}?${params}`);
-    
-    if (!response.ok) {
-      throw new Error(`USGS API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    
-    // Return the raw GeoJSON features - don't transform them
-    return data.features;
-  } catch (error) {
-    console.error('Error fetching earthquake data:', error);
-    throw error;
-  }
+export async function getRecentEarthquakes(options = {}, requestOptions = {}) {
+  return fetchRecentEarthquakes(options, requestOptions);
 }
